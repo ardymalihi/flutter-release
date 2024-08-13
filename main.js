@@ -22,6 +22,14 @@ async function promptUser() {
       name: 'appName',
       message: 'Enter the new app name:',
     },
+    {
+      name: 'offlineCategoryId',
+      message: 'Enter the OFFLINE_CATEGORY_ID:',
+    },
+    {
+      name: 'apiUrl',
+      message: 'Enter the API_URL:',
+    },
   ]);
   return answers;
 }
@@ -77,6 +85,25 @@ function updateIOSFiles(appName, projectDir) {
   fs.writeFileSync(infoPlistPath, infoPlist, 'utf8');
 }
 
+// Update environment variables or configuration files
+function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
+  // Example: Update an environment file or a specific Dart file with the provided values
+  const envFilePath = path.join(projectDir, '.env'); // Assuming you have a .env file
+
+  let envFileContent = `OFFLINE_CATEGORY_ID=${offlineCategoryId}\nAPI_URL=${apiUrl}\n`;
+
+  fs.writeFileSync(envFilePath, envFileContent, 'utf8');
+
+  // Alternatively, if you store these variables in a Dart file
+  const configFilePath = path.join(projectDir, 'lib', 'config.dart'); // Assuming a config.dart file exists
+  if (fs.existsSync(configFilePath)) {
+    let configContent = fs.readFileSync(configFilePath, 'utf8');
+    configContent = configContent.replace(/const String OFFLINE_CATEGORY_ID = '[^']*';/, `const String OFFLINE_CATEGORY_ID = '${offlineCategoryId}';`);
+    configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
+    fs.writeFileSync(configFilePath, configContent, 'utf8');
+  }
+}
+
 // Build the Flutter app for Android and iOS
 function buildApp(projectDir) {
   return new Promise((resolve, reject) => {
@@ -117,11 +144,12 @@ function copyToShippableFolder(projectDir, folderName) {
 }
 
 async function main() {
-  const { flutterAppFolderName, bundleName, appName } = await promptUser();
+  const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
   const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);  // Resolve path based on user input
   const projectDir = copyProject(flutterAppFolderPath, bundleName);  // Step 1: Create a copy of the project based on bundle name
   updateAndroidFiles(bundleName, appName, projectDir);
   updateIOSFiles(appName, projectDir);
+  updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
   try {
     await buildApp(projectDir);
