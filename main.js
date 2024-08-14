@@ -29,6 +29,10 @@ async function promptUser() {
         {
             name: 'apiUrl',
             message: 'Enter the API_URL:',
+        },
+        {
+            name: 'teamId',
+            message: 'Enter your Apple Development Team ID:',
         }
     ]);
     return answers;
@@ -103,14 +107,41 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     fs.writeFileSync(mainActivityPath, mainActivityContent, 'utf8');
 }
 
-// Update iOS files
-function updateIOSFiles(appName, projectDir) {
+// Update iOS files and setup xcconfig for automated signing
+function updateIOSFilesAndSetupSigning(appName, projectDir, teamId) {
     const infoPlistPath = path.join(projectDir, 'ios', 'Runner', 'Info.plist');
+    const xcconfigPath = path.join(projectDir, 'ios', 'config', 'build.xcconfig');
 
     // Update Info.plist
     let infoPlist = fs.readFileSync(infoPlistPath, 'utf8');
     infoPlist = infoPlist.replace(/<key>CFBundleName<\/key>\s*<string>[^<]+<\/string>/, `<key>CFBundleName</key>\n\t<string>${appName}</string>`);
     fs.writeFileSync(infoPlistPath, infoPlist, 'utf8');
+
+    // Create or update the xcconfig file for signing
+    const xcconfigContent = `
+CODE_SIGN_STYLE = Automatic
+DEVELOPMENT_TEAM = ${teamId}
+CODE_SIGN_IDENTITY = iPhone Developer
+    `;
+    fs.ensureDirSync(path.dirname(xcconfigPath));
+    fs.writeFileSync(xcconfigPath, xcconfigContent.trim(), 'utf8');
+
+    console.log('xcconfig file for automated signing created/updated.');
+
+    // Modify the Xcode project to use the xcconfig file
+    const projectPbxprojPath = path.join(projectDir, 'ios', 'Runner.xcodeproj', 'project.pbxproj');
+    let projectPbxproj = fs.readFileSync(projectPbxprojPath, 'utf8');
+
+    // Set the baseConfigurationReference to point to the xcconfig file
+    projectPbxproj = projectPbxproj.replace(/(buildSettings = \{[^}]*)(\};)/g, (match, p1, p2) => {
+        if (!p1.includes('baseConfigurationReference')) {
+            return `${p1}\n\t\t\t\tbaseConfigurationReference = "${xcconfigPath}";${p2}`;
+        }
+        return match;
+    });
+
+    fs.writeFileSync(projectPbxprojPath, projectPbxproj, 'utf8');
+    console.log('Xcode project updated to use xcconfig for signing.');
 }
 
 // Update environment variables or configuration files
@@ -136,49 +167,71 @@ function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
 function buildApp(projectDir) {
     return new Promise((resolve, reject) => {
         console.log('Building Flutter app for Android and iOS...');
-        exec('flutter clean && flutter build apk && flutter build ios', { cwd: projectDir }, (err, stdout, stderr) => {
-            if (err) {
-                console.error(`Error during build: ${stderr}`);
-                return reject(err);
+        const buildProcess = exec('flutter clean && flutter build apk --verbose && flutter build ios --verbose', { cwd: projectDir });
+
+        buildProcess.stdout.on('data', (data) => {
+            console.log(data.toString());
+        });
+
+        buildProcess.stderr.on('data', (data) => {
+            console.error(data.toString());
+        });
+
+        buildProcess.on('close', (code) => {
+            if (code === 0) {
+                console.log('Build completed successfully.');
+                resolve();
+            } else {
+                console.error(`Build process exited with code ${code}`);
+                reject(new Error(`Build process exited with code ${code}`));
             }
-            console.log('Build completed successfully.');
-            resolve(stdout);
         });
     });
 }
 
 // Copy build outputs to a separate "shippable" folder
 function copyToShippableFolder(projectDir, folderName) {
-    console.log('Copying build outputs to the shippable folder...');
+    console.log(`Preparing to copy build outputs to the shippable folder for "${folderName}"...`);
 
-    const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'release', 'app-release.apk');
-    const iosAppPath = path.join(projectDir, 'build', 'ios', 'iphoneos');
     const shippableAppDir = path.join(outputDir, folderName);
+
+    // Clean up the existing shippable folder if it exists
+    if (fs.existsSync(shippableAppDir)) {
+        console.log(`Cleaning up existing folder: ${shippableAppDir}`);
+        fs.removeSync(shippableAppDir);
+        console.log('Existing folder cleaned up.');
+    }
 
     // Create shippable folder if it doesn't exist
     fs.ensureDirSync(shippableAppDir);
 
+    const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'release', 'app-release.apk');
+    const iosAppPath = path.join(projectDir, 'build', 'ios', 'iphoneos');
+
     // Copy Android APK
     if (fs.existsSync(androidApkPath)) {
         fs.copyFileSync(androidApkPath, path.join(shippableAppDir, 'app-release.apk'));
+        console.log('Android APK copied to the shippable folder.');
     }
 
     // Copy iOS build folder
     if (fs.existsSync(iosAppPath)) {
         fs.copySync(iosAppPath, path.join(shippableAppDir, 'ios'));
+        console.log('iOS build copied to the shippable folder.');
     }
 
     console.log('Build outputs copied to the shippable folder.');
 }
 
+
 async function main() {
-    const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
+    const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);  // Resolve path based on user input
     const projectDir = copyProject(flutterAppFolderPath, bundleName);  // Step 1: Create a copy of the project based on bundle name
 
     // Step 2: Update Android and iOS files
     updateAndroidFiles(bundleName, appName, projectDir);
-    updateIOSFiles(appName, projectDir);
+    updateIOSFilesAndSetupSigning(appName, projectDir, teamId);
     updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
     // Step 3: Build the app
