@@ -1,0 +1,14 @@
+{
+  "name": "flutter-release",
+  "version": "1.0.0",
+  "description": "Flutter Release Workflow",
+  "main": "main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "fs-extra": "^11.2.0",
+    "inquirer": "^10.1.8"
+  }
+}

@@ -1,4 +1,4 @@
-const inquirer = require('inquirer');
+const inquirer = require('inquirer').default;
 const fs = require('fs-extra');
 const path = require('path');
 const { exec } = require('child_process');
@@ -67,6 +67,13 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
 
     // Update AndroidManifest.xml
     let androidManifest = fs.readFileSync(androidManifestPath, 'utf8');
+    const oldPackageNameMatch = androidManifest.match(/package="([^"]+)"/);
+    if (!oldPackageNameMatch) {
+        throw new Error('Could not find the package name in AndroidManifest.xml');
+    }
+    const oldPackageName = oldPackageNameMatch[1];
+    const oldPackagePath = path.join(kotlinPath, ...oldPackageName.split('.'));
+
     androidManifest = androidManifest.replace(/package="[^"]+"/, `package="${bundleName}"`);
     fs.writeFileSync(androidManifestPath, androidManifest, 'utf8');
 
@@ -83,7 +90,6 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     fs.ensureDirSync(newPackagePath);
 
     // Move MainActivity.kt or MainActivity.java to the new package path
-    const oldPackagePath = path.join(kotlinPath, 'com', 'example', 'app'); // Adjust this based on the current structure
     const mainActivityFile = fs.existsSync(path.join(oldPackagePath, 'MainActivity.kt'))
         ? 'MainActivity.kt'
         : 'MainActivity.java';
