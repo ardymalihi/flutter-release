@@ -4,8 +4,8 @@ const path = require('path');
 const { exec } = require('child_process');
 
 // Define the parent directory for sibling folders
-const parentDir = path.resolve(__dirname, '..'); // This will give you the parent directory path
-const outputDir = path.join(__dirname, 'shippable'); // This will place the output in the shippable folder within flutter-release
+const parentDir = path.resolve(__dirname, '..');
+const outputDir = path.join(__dirname, 'shippable');
 
 // Prompt user for app settings and the Flutter app folder name
 async function promptUser() {
@@ -17,6 +17,13 @@ async function promptUser() {
         {
             name: 'bundleName',
             message: 'Enter the new bundle name (e.g., com.example.app):',
+            validate: function (input) {
+                const bundleIdPattern = /^[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)+$/;
+                if (!bundleIdPattern.test(input)) {
+                    return 'Invalid Bundle ID. A valid Bundle ID must consist of alphanumeric characters and dots, and should not start or end with a dot.';
+                }
+                return true;
+            }
         },
         {
             name: 'appName',
@@ -33,9 +40,28 @@ async function promptUser() {
         {
             name: 'teamId',
             message: 'Enter your Apple Development Team ID:',
+            message: 'Log in to your Apple Developer account then Under the Membership section, you will find your Team ID',
+            default: 'ZBWAG62J88'
         }
     ]);
     return answers;
+}
+
+// Function to pause and ask the user to manually apply Xcode changes
+async function confirmXcodeChanges() {
+    const confirmation = await inquirer.prompt([
+        {
+            type: 'confirm',
+            name: 'xcodeChangesApplied',
+            message: 'Did you manually apply the required changes in Xcode (e.g., set the Development Team, Bundle ID)?',
+            default: false
+        }
+    ]);
+
+    if (!confirmation.xcodeChangesApplied) {
+        console.log("Please apply the required changes in Xcode and then return to confirm.");
+        await confirmXcodeChanges(); // Recursive call until user confirms
+    }
 }
 
 // Determine if the flutterAppFolderName is a path or a folder name
@@ -57,8 +83,17 @@ function copyProject(flutterAppFolderPath, bundleName) {
     const folderName = convertBundleNameToFolderName(bundleName);
     const appDir = path.join(outputDir, folderName);
 
+    // Resolve absolute paths for comparison
+    const resolvedSrc = path.resolve(flutterAppFolderPath);
+    const resolvedDest = path.resolve(appDir);
+
+    // Check if the destination is a subdirectory of the source
+    if (resolvedDest.startsWith(resolvedSrc)) {
+        throw new Error(`Cannot copy '${resolvedSrc}' to a subdirectory of itself, '${resolvedDest}'.`);
+    }
+
     console.log(`Creating a copy of the project in folder "${folderName}"...`);
-    fs.copySync(flutterAppFolderPath, appDir);
+    fs.copySync(resolvedSrc, resolvedDest);
     console.log('Project copy created.');
     return appDir;
 }
@@ -146,48 +181,68 @@ CODE_SIGN_IDENTITY = iPhone Developer
 
 // Update environment variables or configuration files
 function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
-    // Example: Update an environment file or a specific Dart file with the provided values
-    const envFilePath = path.join(projectDir, '.env'); // Assuming you have a .env file
-
-    let envFileContent = `OFFLINE_CATEGORY_ID=${offlineCategoryId}\nAPI_URL=${apiUrl}\n`;
-
-    fs.writeFileSync(envFilePath, envFileContent, 'utf8');
-
-    // Alternatively, if you store these variables in a Dart file
     const configFilePath = path.join(projectDir, 'lib', 'config.dart'); // Assuming a config.dart file exists
-    if (fs.existsSync(configFilePath)) {
-        let configContent = fs.readFileSync(configFilePath, 'utf8');
-        configContent = configContent.replace(/const String OFFLINE_CATEGORY_ID = '[^']*';/, `const String OFFLINE_CATEGORY_ID = '${offlineCategoryId}';`);
-        configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
-        fs.writeFileSync(configFilePath, configContent, 'utf8');
-    }
+    let configContent = fs.readFileSync(configFilePath, 'utf8');
+    configContent = configContent.replace(/const String OFFLINE_CATEGORY_ID = '[^']*';/, `const String OFFLINE_CATEGORY_ID = '${offlineCategoryId}';`);
+    configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
+    fs.writeFileSync(configFilePath, configContent, 'utf8');
+
 }
 
 // Build the Flutter app for Android and iOS
 function buildApp(projectDir) {
     return new Promise((resolve, reject) => {
         console.log('Building Flutter app for Android and iOS...');
-        const buildProcess = exec('flutter clean && flutter build apk --verbose && flutter build ios --verbose', { cwd: projectDir });
 
-        buildProcess.stdout.on('data', (data) => {
+        // Step 1: Build the Flutter app without code signing
+        const flutterBuildProcess = exec('flutter clean && flutter build apk && flutter build ios --no-codesign', { cwd: projectDir });
+
+        flutterBuildProcess.stdout.on('data', (data) => {
             console.log(data.toString());
         });
 
-        buildProcess.stderr.on('data', (data) => {
+        flutterBuildProcess.stderr.on('data', (data) => {
             console.error(data.toString());
         });
 
-        buildProcess.on('close', (code) => {
+        flutterBuildProcess.on('close', (code) => {
             if (code === 0) {
-                console.log('Build completed successfully.');
-                resolve();
+                console.log('Flutter build completed successfully.');
+
+                // Step 2: Run xcodebuild with -allowProvisioningUpdates to sign the app
+                const xcodeBuildProcess = exec(
+                    'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphoneos -configuration Release archive -archivePath ios/Runner.xcarchive -allowProvisioningUpdates',
+                    { cwd: projectDir }
+                );
+
+                xcodeBuildProcess.stdout.on('data', (data) => {
+                    console.log(data.toString());
+                });
+
+                xcodeBuildProcess.stderr.on('data', (data) => {
+                    console.error(data.toString());
+                });
+
+                xcodeBuildProcess.on('close', (xcodeCode) => {
+                    if (xcodeCode === 0) {
+                        console.log('Xcode build and signing completed successfully.');
+                        resolve();
+                    } else {
+                        console.error('Xcode build process failed.');
+                        const lastFewLines = errorOutput.split('\n').slice(-10).join('\n');
+                        console.error('Error output:\n', lastFewLines);
+                        reject(new Error('Xcode build process exited with errors.'));
+                    }
+                });
+
             } else {
-                console.error(`Build process exited with code ${code}`);
-                reject(new Error(`Build process exited with code ${code}`));
+                console.error('Flutter build process failed.');
+                reject(new Error('Flutter build process exited with errors.'));
             }
         });
     });
 }
+
 
 // Copy build outputs to a separate "shippable" folder
 function copyToShippableFolder(projectDir, folderName) {
@@ -223,11 +278,15 @@ function copyToShippableFolder(projectDir, folderName) {
     console.log('Build outputs copied to the shippable folder.');
 }
 
-
 async function main() {
     const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId } = await promptUser();
-    const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);  // Resolve path based on user input
-    const projectDir = copyProject(flutterAppFolderPath, bundleName);  // Step 1: Create a copy of the project based on bundle name
+    const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
+    const projectDir = copyProject(flutterAppFolderPath, bundleName);
+
+    // Pause the script and ask the user to apply Xcode changes manually
+    console.log('Please open your Xcode project and apply the necessary changes.');
+    console.log('For example: Set the Development Team, ensure a valid Bundle ID, etc.');
+    await confirmXcodeChanges();
 
     // Step 2: Update Android and iOS files
     updateAndroidFiles(bundleName, appName, projectDir);
