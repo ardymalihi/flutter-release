@@ -13,10 +13,12 @@ async function promptUser() {
         {
             name: 'flutterAppFolderName',
             message: 'Enter the name or path of your Flutter app folder:',
+            default: 'prep'
         },
         {
             name: 'bundleName',
             message: 'Enter the new bundle name (e.g., com.example.app):',
+            default: 'com.prepto.ccp',
             validate: function (input) {
                 const bundleIdPattern = /^[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)+$/;
                 if (!bundleIdPattern.test(input)) {
@@ -28,20 +30,34 @@ async function promptUser() {
         {
             name: 'appName',
             message: 'Enter the new app name:',
+            default: 'Canadian Citizenship Prep'
         },
         {
             name: 'offlineCategoryId',
             message: 'Enter the OFFLINE_CATEGORY_ID:',
+            default: '2'
         },
         {
             name: 'apiUrl',
             message: 'Enter the API_URL:',
+            default: 'https://prep-admin.vercel.app'
         },
         {
             name: 'teamId',
             message: 'Enter your Apple Development Team ID:',
-            message: 'Log in to your Apple Developer account then Under the Membership section, you will find your Team ID',
             default: 'ZBWAG62J88'
+        },
+        {
+            type: 'confirm',
+            name: 'buildAndroid',
+            message: 'Do you want to build for Android?',
+            default: true
+        },
+        {
+            type: 'confirm',
+            name: 'buildIOS',
+            message: 'Do you want to build for iOS?',
+            default: true
         }
     ]);
     return answers;
@@ -189,13 +205,29 @@ function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
 
 }
 
-// Build the Flutter app for Android and iOS
-function buildApp(projectDir) {
+// Build the Flutter app for Android and/or iOS
+function buildApp(projectDir, buildAndroid, buildIOS) {
     return new Promise((resolve, reject) => {
-        console.log('Building Flutter app for Android and iOS...');
+        console.log('Building Flutter app...');
 
-        // Step 1: Build the Flutter app without code signing
-        const flutterBuildProcess = exec('flutter clean && flutter build apk && flutter build ios --no-codesign', { cwd: projectDir });
+        const buildCommands = [];
+
+        if (buildAndroid) {
+            buildCommands.push('flutter build apk');
+        }
+
+        if (buildIOS) {
+            buildCommands.push('flutter build ios --no-codesign');
+        }
+
+        // If there are no build commands, resolve without doing anything
+        if (buildCommands.length === 0) {
+            console.log('No build process was selected.');
+            return resolve();
+        }
+
+        const buildCommand = buildCommands.join(' && ');
+        const flutterBuildProcess = exec(buildCommand, { cwd: projectDir });
 
         flutterBuildProcess.stdout.on('data', (data) => {
             console.log(data.toString());
@@ -209,32 +241,32 @@ function buildApp(projectDir) {
             if (code === 0) {
                 console.log('Flutter build completed successfully.');
 
-                // Step 2: Run xcodebuild with -allowProvisioningUpdates to sign the app
-                const xcodeBuildProcess = exec(
-                    'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphoneos -configuration Release archive -archivePath ios/Runner.xcarchive -allowProvisioningUpdates',
-                    { cwd: projectDir }
-                );
+                if (buildIOS) {
+                    const xcodeBuildProcess = exec(
+                        'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphoneos -configuration Release archive -archivePath ios/Runner.xcarchive -allowProvisioningUpdates',
+                        { cwd: projectDir }
+                    );
 
-                xcodeBuildProcess.stdout.on('data', (data) => {
-                    console.log(data.toString());
-                });
+                    xcodeBuildProcess.stdout.on('data', (data) => {
+                        console.log(data.toString());
+                    });
 
-                xcodeBuildProcess.stderr.on('data', (data) => {
-                    console.error(data.toString());
-                });
+                    xcodeBuildProcess.stderr.on('data', (data) => {
+                        console.error(data.toString());
+                    });
 
-                xcodeBuildProcess.on('close', (xcodeCode) => {
-                    if (xcodeCode === 0) {
-                        console.log('Xcode build and signing completed successfully.');
-                        resolve();
-                    } else {
-                        console.error('Xcode build process failed.');
-                        const lastFewLines = errorOutput.split('\n').slice(-10).join('\n');
-                        console.error('Error output:\n', lastFewLines);
-                        reject(new Error('Xcode build process exited with errors.'));
-                    }
-                });
-
+                    xcodeBuildProcess.on('close', (xcodeCode) => {
+                        if (xcodeCode === 0) {
+                            console.log('Xcode build and signing completed successfully.');
+                            resolve();
+                        } else {
+                            console.error('Xcode build process failed.');
+                            reject(new Error('Xcode build process exited with errors.'));
+                        }
+                    });
+                } else {
+                    resolve();
+                }
             } else {
                 console.error('Flutter build process failed.');
                 reject(new Error('Flutter build process exited with errors.'));
@@ -242,7 +274,6 @@ function buildApp(projectDir) {
         });
     });
 }
-
 
 // Copy build outputs to a separate "shippable" folder
 function copyToShippableFolder(projectDir, folderName) {
@@ -278,27 +309,38 @@ function copyToShippableFolder(projectDir, folderName) {
     console.log('Build outputs copied to the shippable folder.');
 }
 
+// Main function to control the process
 async function main() {
-    const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId } = await promptUser();
+    const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId, buildAndroid, buildIOS } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
     const projectDir = copyProject(flutterAppFolderPath, bundleName);
 
-    // Pause the script and ask the user to apply Xcode changes manually
-    console.log('Please open your Xcode project and apply the necessary changes.');
-    console.log('For example: Set the Development Team, ensure a valid Bundle ID, etc.');
-    await confirmXcodeChanges();
+    // Pause the script and ask the user to apply Xcode changes manually if iOS build is selected
+    if (buildIOS) {
+        console.log('Please open your Xcode project and apply the necessary changes.');
+        console.log('For example: Set the Development Team, ensure a valid Bundle ID, etc.');
+        await confirmXcodeChanges();
+    }
 
     // Step 2: Update Android and iOS files
-    updateAndroidFiles(bundleName, appName, projectDir);
-    updateIOSFilesAndSetupSigning(appName, projectDir, teamId);
+    if (buildAndroid) {
+        updateAndroidFiles(bundleName, appName, projectDir);
+    }
+    if (buildIOS) {
+        updateIOSFilesAndSetupSigning(appName, projectDir, teamId);
+    }
     updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
-    // Step 3: Build the app
+    // Step 3: Build the app for selected platforms
     try {
-        await buildApp(projectDir);
-        const folderName = convertBundleNameToFolderName(bundleName);
-        copyToShippableFolder(projectDir, folderName);
-        console.log('App is ready for deployment!');
+        if (buildAndroid || buildIOS) {
+            await buildApp(projectDir, buildAndroid, buildIOS);
+            const folderName = convertBundleNameToFolderName(bundleName);
+            copyToShippableFolder(projectDir, folderName);
+            console.log('App is ready for deployment!');
+        } else {
+            console.log('No build process was selected.');
+        }
     } catch (error) {
         console.error('An error occurred during the build process:', error);
     }
