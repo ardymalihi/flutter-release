@@ -120,7 +120,7 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     const buildGradlePath = path.join(projectDir, 'android', 'app', 'build.gradle');
     const kotlinPath = path.join(projectDir, 'android', 'app', 'src', 'main', 'kotlin');
 
-    // Update AndroidManifest.xml
+    // Update AndroidManifest.xml with the new package name and app name
     let androidManifest = fs.readFileSync(androidManifestPath, 'utf8');
     const oldPackageNameMatch = androidManifest.match(/package="([^"]+)"/);
     if (!oldPackageNameMatch) {
@@ -130,14 +130,15 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     const oldPackagePath = path.join(kotlinPath, ...oldPackageName.split('.'));
 
     androidManifest = androidManifest.replace(/package="[^"]+"/, `package="${bundleName}"`);
+    androidManifest = androidManifest.replace(/android:label="[^"]+"/, `android:label="${appName}"`);
     fs.writeFileSync(androidManifestPath, androidManifest, 'utf8');
 
-    // Update build.gradle
+    // Update build.gradle with the new applicationId
     let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
     buildGradle = buildGradle.replace(/applicationId "[^"]+"/, `applicationId "${bundleName}"`);
     fs.writeFileSync(buildGradlePath, buildGradle, 'utf8');
 
-    // Update package structure
+    // Update the package structure
     const packageParts = bundleName.split('.');
     const newPackagePath = path.join(kotlinPath, ...packageParts);
 
