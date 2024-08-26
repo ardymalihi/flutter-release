@@ -199,7 +199,7 @@ CODE_SIGN_IDENTITY = iPhone Developer
 function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
     const configFilePath = path.join(projectDir, 'lib', 'config.dart'); // Assuming a config.dart file exists
     let configContent = fs.readFileSync(configFilePath, 'utf8');
-    configContent = configContent.replace(/const String OFFLINE_CATEGORY_ID = '[^']*';/, `const String OFFLINE_CATEGORY_ID = '${offlineCategoryId}';`);
+    configContent = configContent.replace(/const int OFFLINE_CATEGORY_ID = [^']*;/, `const int OFFLINE_CATEGORY_ID = ${offlineCategoryId};`);
     configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
     fs.writeFileSync(configFilePath, configContent, 'utf8');
 
@@ -281,33 +281,35 @@ function copyToShippableFolder(projectDir, folderName) {
 
     const shippableAppDir = path.join(outputDir, folderName);
 
-    // Clean up the existing shippable folder if it exists
-    if (fs.existsSync(shippableAppDir)) {
-        console.log(`Cleaning up existing folder: ${shippableAppDir}`);
-        fs.removeSync(shippableAppDir);
-        console.log('Existing folder cleaned up.');
-    }
-
-    // Create shippable folder if it doesn't exist
+    // Ensure the shippable folder exists
     fs.ensureDirSync(shippableAppDir);
 
     const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'release', 'app-release.apk');
-    const iosAppPath = path.join(projectDir, 'build', 'ios', 'iphoneos');
+    const iosArchivePath = path.join(projectDir, 'ios', 'Runner.xcarchive');
 
-    // Copy Android APK
+    console.log(`Checking Android APK at: ${androidApkPath}`);
+    console.log(`Checking iOS archive at: ${iosArchivePath}`);
+
+    // Copy Android APK to shippable folder
     if (fs.existsSync(androidApkPath)) {
         fs.copyFileSync(androidApkPath, path.join(shippableAppDir, 'app-release.apk'));
         console.log('Android APK copied to the shippable folder.');
+    } else {
+        console.error('Android APK not found!');
     }
 
-    // Copy iOS build folder
-    if (fs.existsSync(iosAppPath)) {
-        fs.copySync(iosAppPath, path.join(shippableAppDir, 'ios'));
-        console.log('iOS build copied to the shippable folder.');
+    // Copy iOS .xcarchive to shippable folder
+    if (fs.existsSync(iosArchivePath)) {
+        fs.copySync(iosArchivePath, path.join(shippableAppDir, 'Runner.xcarchive'));
+        console.log('iOS archive copied to the shippable folder.');
+    } else {
+        console.error('iOS archive not found!');
     }
 
     console.log('Build outputs copied to the shippable folder.');
 }
+
+
 
 // Main function to control the process
 async function main() {
