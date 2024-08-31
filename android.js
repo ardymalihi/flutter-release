@@ -46,6 +46,25 @@ async function promptUser() {
     return answers;
 }
 
+// Check and prepare the directory for copying the project
+async function prepareDirectory(folderPath) {
+    if (await fs.pathExists(folderPath)) {
+        const { confirmDelete } = await inquirer.prompt({
+            type: 'confirm',
+            name: 'confirmDelete',
+            message: `The directory ${folderPath} already exists. Do you want to delete it and continue?`,
+            default: false
+        });
+
+        if (confirmDelete) {
+            await fs.remove(folderPath);
+            console.log(`Deleted existing directory: ${folderPath}`);
+        } else {
+            throw new Error('Operation cancelled by user.');
+        }
+    }
+}
+
 // Determine if the flutterAppFolderName is a path or a folder name
 function resolveFlutterAppPath(flutterAppFolderName) {
     if (path.isAbsolute(flutterAppFolderName) || flutterAppFolderName.includes('/')) {
@@ -61,21 +80,14 @@ function convertBundleNameToFolderName(bundleName) {
 }
 
 // Create a copy of the project based on the bundle name
-function copyProject(flutterAppFolderPath, bundleName) {
+async function copyProject(flutterAppFolderPath, bundleName) {
     const folderName = convertBundleNameToFolderName(bundleName);
     const appDir = path.join(outputDir, folderName);
 
-    // Resolve absolute paths for comparison
-    const resolvedSrc = path.resolve(flutterAppFolderPath);
-    const resolvedDest = path.resolve(appDir);
-
-    // Check if the destination is a subdirectory of the source
-    if (resolvedDest.startsWith(resolvedSrc)) {
-        throw new Error(`Cannot copy '${resolvedSrc}' to a subdirectory of itself, '${resolvedDest}'.`);
-    }
+    await prepareDirectory(appDir); // Check and prepare the directory before copying
 
     console.log(`Creating a copy of the project in folder "${folderName}"...`);
-    fs.copySync(resolvedSrc, resolvedDest);
+    await fs.copy(flutterAppFolderPath, appDir);
     console.log('Project copy created.');
     return appDir;
 }
@@ -86,7 +98,6 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     const buildGradlePath = path.join(projectDir, 'android', 'app', 'build.gradle');
     const kotlinPath = path.join(projectDir, 'android', 'app', 'src', 'main', 'kotlin');
 
-    // Update AndroidManifest.xml with the new package name and app name
     let androidManifest = fs.readFileSync(androidManifestPath, 'utf8');
     const oldPackageNameMatch = androidManifest.match(/package="([^"]+)"/);
     if (!oldPackageNameMatch) {
@@ -99,26 +110,17 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     androidManifest = androidManifest.replace(/android:label="[^"]+"/, `android:label="${appName}"`);
     fs.writeFileSync(androidManifestPath, androidManifest, 'utf8');
 
-    // Update build.gradle with the new applicationId
     let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
     buildGradle = buildGradle.replace(/applicationId "[^"]+"/, `applicationId "${bundleName}"`);
     fs.writeFileSync(buildGradlePath, buildGradle, 'utf8');
 
-    // Update the package structure
     const packageParts = bundleName.split('.');
     const newPackagePath = path.join(kotlinPath, ...packageParts);
-
-    // Ensure the new package path exists
     fs.ensureDirSync(newPackagePath);
 
-    // Move MainActivity.kt or MainActivity.java to the new package path
-    const mainActivityFile = fs.existsSync(path.join(oldPackagePath, 'MainActivity.kt'))
-        ? 'MainActivity.kt'
-        : 'MainActivity.java';
-
+    const mainActivityFile = fs.existsSync(path.join(oldPackagePath, 'MainActivity.kt')) ? 'MainActivity.kt' : 'MainActivity.java';
     fs.moveSync(path.join(oldPackagePath, mainActivityFile), path.join(newPackagePath, mainActivityFile));
 
-    // Update package name in MainActivity file
     const mainActivityPath = path.join(newPackagePath, mainActivityFile);
     let mainActivityContent = fs.readFileSync(mainActivityPath, 'utf8');
     mainActivityContent = mainActivityContent.replace(/package .+;/, `package ${bundleName};`);
@@ -127,21 +129,17 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
 
 // Update environment variables or configuration files
 function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
-    const configFilePath = path.join(projectDir, 'lib', 'config.dart'); // Assuming a config.dart file exists
+    const configFilePath = path.join(projectDir, 'lib', 'config.dart');
     let configContent = fs.readFileSync(configFilePath, 'utf8');
     configContent = configContent.replace(/const int OFFLINE_CATEGORY_ID = [^']*;/, `const int OFFLINE_CATEGORY_ID = ${offlineCategoryId};`);
     configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
     fs.writeFileSync(configFilePath, configContent, 'utf8');
-
 }
 
 // Build the Flutter app for Android
 function buildApp(projectDir) {
     return new Promise((resolve, reject) => {
         console.log('Building Flutter app...');
-
-
-
         const buildCommand = 'flutter build apk';
         const flutterBuildProcess = exec(buildCommand, { cwd: projectDir });
 
@@ -175,7 +173,6 @@ function copyToShippableFolder(projectDir, folderName) {
     fs.ensureDirSync(shippableAppDir);
 
     const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'release', 'app-release.apk');
-
     console.log(`Checking Android APK at: ${androidApkPath}`);
 
     // Copy Android APK to shippable folder
@@ -185,30 +182,26 @@ function copyToShippableFolder(projectDir, folderName) {
     } else {
         console.error('Android APK not found!');
     }
-
-    console.log('Build outputs copied to the shippable folder.');
 }
-
 
 
 // Main function to control the process
 async function main() {
     const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
-    const projectDir = copyProject(flutterAppFolderPath, bundleName);
-
-    // Step 2: Update Android files
-    updateAndroidFiles(bundleName, appName, projectDir);
-    updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
-
-    // Step 3: Build the app for selected platforms
     try {
-        await buildApp(projectDir);
+        const projectDir = await copyProject(flutterAppFolderPath, bundleName);
+        updateAndroidFiles(bundleName, appName, projectDir);
+        updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
+
+        await buildApp(projectDir);  // Build the Android APK
+
         const folderName = convertBundleNameToFolderName(bundleName);
-        copyToShippableFolder(projectDir, folderName);
+        copyToShippableFolder(projectDir, folderName);  // Copy APK to the shippable folder
+
         console.log('App is ready for deployment!');
     } catch (error) {
-        console.error('An error occurred during the build process:', error);
+        console.error('An error occurred:', error.message);
     }
 }
 
