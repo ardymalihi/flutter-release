@@ -2,6 +2,7 @@ const inquirer = require('inquirer').default;
 const fs = require('fs-extra');
 const path = require('path');
 const { exec } = require('child_process');
+const sharp = require('sharp');  // Ensure sharp is installed via npm
 
 // Define the parent directory for sibling folders
 const parentDir = path.resolve(__dirname, '..');
@@ -71,6 +72,34 @@ CODE_SIGN_IDENTITY = iPhone Developer
     console.log('iOS files and signing configurations updated.');
 }
 
+// Function to update iOS app icons
+async function updateIOSAppIcons(flutterAppFolderPath, projectDir) {
+    const iconPath = path.join(flutterAppFolderPath, 'icon.png');
+    const appIconSetPath = path.join(projectDir, 'ios', 'Runner', 'Assets.xcassets', 'AppIcon.appiconset');
+    const iosIconSizes = [
+        { size: 20, scales: [2, 3] }, // Notification
+        { size: 29, scales: [1, 2, 3] }, // Settings and Spotlight
+        { size: 40, scales: [2, 3] }, // Spotlight
+        { size: 60, scales: [2, 3] } // App
+    ];
+
+    if (await fs.pathExists(iconPath)) {
+        console.log('Custom iOS icon found. Updating iOS app icons...');
+        await Promise.all(iosIconSizes.flatMap(({ size, scales }) =>
+            scales.map(scale => {
+                const dimension = size * scale;
+                const iconName = `Icon-${dimension}.png`;
+                return sharp(iconPath)
+                    .resize(dimension, dimension)
+                    .toFile(path.join(appIconSetPath, iconName));
+            })
+        ));
+        console.log('iOS app icons updated.');
+    } else {
+        console.log('No custom iOS icon found. Using default Flutter app icon.');
+    }
+}
+
 // Build the iOS app
 function buildIOSApp(projectDir) {
     console.log('Building iOS app...');
@@ -101,10 +130,12 @@ function buildIOSApp(projectDir) {
 // Main function to control the process
 async function main() {
     const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId } = await promptUser();
-    const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
-    const projectDir = copyProject(flutterAppFolderPath, bundleName);
+    const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderPath);
+    const projectDir = await copyProject(flutterAppFolderPath, bundleName);
 
     updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, teamId);
+    await updateIOSAppIcons(flutterAppFolderPath, projectDir);  // Update iOS app icons
+
     try {
         await buildIOSApp(projectDir);
         console.log('App is ready for deployment!');
