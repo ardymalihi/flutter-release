@@ -7,11 +7,11 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Launch Program",
+            "name": "Android",
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}/main.js",
+            "program": "${workspaceFolder}/android.js",
             "console": "integratedTerminal",
             "outputCapture": "std"
         }

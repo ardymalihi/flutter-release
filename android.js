@@ -2,6 +2,7 @@ const inquirer = require('inquirer').default;
 const fs = require('fs-extra');
 const path = require('path');
 const { exec } = require('child_process');
+const sharp = require('sharp');
 
 // Define the parent directory for sibling folders
 const parentDir = path.resolve(__dirname, '..');
@@ -136,6 +137,37 @@ function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
     fs.writeFileSync(configFilePath, configContent, 'utf8');
 }
 
+// Update App Icons
+const updateAppIcon = async (projectDir) => {
+    const iconPath = path.join(__dirname, 'icon.png');
+    if (await fs.pathExists(iconPath)) {
+        console.log('Custom icon found. Updating app icons...');
+
+        // Define target sizes and directories for Android
+        const androidTargets = [
+            { size: 48, dir: 'mipmap-mdpi' },
+            { size: 72, dir: 'mipmap-hdpi' },
+            { size: 96, dir: 'mipmap-xhdpi' },
+            { size: 144, dir: 'mipmap-xxhdpi' },
+            { size: 192, dir: 'mipmap-xxxhdpi' }
+        ];
+
+        // Resize and copy icons for Android
+        await Promise.all(androidTargets.map(async target => {
+            const destPath = path.join(projectDir, 'android', 'app', 'src', 'main', 'res', target.dir, 'ic_launcher.png');
+            await sharp(iconPath)
+                .resize(target.size, target.size) // Resize icon to the target size
+                .toFile(destPath); // Save resized icon
+        }));
+
+        console.log('Android app icons updated.');
+        
+        // Additional steps can be added here for iOS or other platforms
+    } else {
+        console.log('No custom icon found. Using default Flutter app icon.');
+    }
+};
+
 // Build the Flutter app for Android
 function buildApp(projectDir) {
     return new Promise((resolve, reject) => {
@@ -184,13 +216,14 @@ function copyToShippableFolder(projectDir, folderName) {
     }
 }
 
-
 // Main function to control the process
 async function main() {
     const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
     try {
         const projectDir = await copyProject(flutterAppFolderPath, bundleName);
+        await updateAppIcon(projectDir);  // Update the app icon first
+
         updateAndroidFiles(bundleName, appName, projectDir);
         updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
