@@ -268,7 +268,7 @@ async function generateKeystore(projectDir) {
 storePassword=${keystoreDetails.keyPassword}
 keyPassword=${keystoreDetails.keyPassword}
 keyAlias=${keystoreDetails.keyAlias}
-storeFile=${keystoreFileName}
+storeFile=../${keystoreFileName}
 `;
 
     fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
