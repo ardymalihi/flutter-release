@@ -8,9 +8,32 @@ const sharp = require('sharp');
 const parentDir = path.resolve(__dirname, '..');
 const outputDir = path.join(__dirname, 'shippable');
 
+// Keystore file name
+const keystoreFileName = 'my-release-key.jks';
+
+// Check if keytool is installed
+function checkKeytoolInstalled() {
+    return new Promise((resolve, reject) => {
+        exec('keytool -help', (error, stdout, stderr) => {
+            if (error) {
+                resolve(false); // keytool is not installed
+            } else {
+                resolve(true); // keytool is installed
+            }
+        });
+    });
+}
+
 // Prompt user for app settings and the Flutter app folder name
 async function promptUser() {
     const answers = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'buildMode',
+            message: 'Select the build mode:',
+            choices: ['Debug', 'Release'],
+            default: 'Debug'
+        },
         {
             name: 'flutterAppFolderName',
             message: 'Enter the name or path of your Flutter app folder:',
@@ -113,6 +136,40 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
 
     let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
     buildGradle = buildGradle.replace(/applicationId "[^"]+"/, `applicationId "${bundleName}"`);
+
+    // Insert signing configurations if not present
+    if (!buildGradle.includes('signingConfigs')) {
+        const signingConfig = `
+        def keystoreProperties = new Properties()
+        def keystorePropertiesFile = rootProject.file('key.properties')
+        if (keystorePropertiesFile.exists()) {
+            keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+        }
+
+        android {
+            // ... existing configurations
+
+            signingConfigs {
+                release {
+                    keyAlias keystoreProperties['keyAlias']
+                    keyPassword keystoreProperties['keyPassword']
+                    storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+                    storePassword keystoreProperties['storePassword']
+                }
+            }
+
+            buildTypes {
+                release {
+                    signingConfig signingConfigs.release
+                    minifyEnabled false
+                    shrinkResources false
+                    // ... existing configurations
+                }
+            }
+        }
+        `;
+        buildGradle = buildGradle.replace(/android\s*{/, signingConfig);
+    }
     fs.writeFileSync(buildGradlePath, buildGradle, 'utf8');
 
     const packageParts = bundleName.split('.');
@@ -132,7 +189,7 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
 function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
     const configFilePath = path.join(projectDir, 'lib', 'config.dart');
     let configContent = fs.readFileSync(configFilePath, 'utf8');
-    configContent = configContent.replace(/const int OFFLINE_CATEGORY_ID = [^']*;/, `const int OFFLINE_CATEGORY_ID = ${offlineCategoryId};`);
+    configContent = configContent.replace(/const int OFFLINE_CATEGORY_ID = [^;]*;/, `const int OFFLINE_CATEGORY_ID = ${offlineCategoryId};`);
     configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
     fs.writeFileSync(configFilePath, configContent, 'utf8');
 }
@@ -168,11 +225,120 @@ const updateAppIcon = async (projectDir) => {
     }
 };
 
-// Build the Flutter app for Android
-function buildApp(projectDir) {
+// Generate the release keystore if it doesn't exist
+async function generateKeystore(projectDir) {
+    const keystorePath = path.join(projectDir, keystoreFileName);
+
+    if (await fs.pathExists(keystorePath)) {
+        console.log('Keystore already exists. Skipping keystore generation.');
+        return keystorePath;
+    }
+
+    console.log('Keystore not found. Generating a new keystore...');
+
+    const keystoreDetails = await inquirer.prompt([
+        {
+            name: 'keyAlias',
+            message: 'Enter a key alias for your keystore:',
+            default: 'my-key-alias'
+        },
+        {
+            type: 'password',
+            name: 'keyPassword',
+            message: 'Enter a password for your keystore (at least 6 characters):',
+            mask: '*',
+            validate: function (input) {
+                return input.length >= 6 || 'Password must be at least 6 characters long.';
+            }
+        },
+        {
+            type: 'password',
+            name: 'keyPasswordConfirm',
+            message: 'Confirm your keystore password:',
+            mask: '*',
+            validate: function (input, answers) {
+                return input === answers.keyPassword || 'Passwords do not match.';
+            }
+        },
+        {
+            name: 'validity',
+            message: 'Enter the validity period (in days):',
+            default: '10000',
+            validate: function (input) {
+                return !isNaN(parseInt(input)) || 'Please enter a valid number.';
+            }
+        },
+        {
+            name: 'name',
+            message: 'Enter your full name:'
+        },
+        {
+            name: 'organizationUnit',
+            message: 'Enter your organizational unit:'
+        },
+        {
+            name: 'organization',
+            message: 'Enter your organization:'
+        },
+        {
+            name: 'city',
+            message: 'Enter your city or locality:'
+        },
+        {
+            name: 'state',
+            message: 'Enter your state or province:'
+        },
+        {
+            name: 'countryCode',
+            message: 'Enter your country code (e.g., US):',
+            validate: function (input) {
+                return input.length === 2 || 'Country code must be 2 characters.';
+            }
+        }
+    ]);
+
+    // Build the keytool command
+    const keytoolCommand = `keytool -genkeypair -v -keystore "${keystorePath}" -alias "${keystoreDetails.keyAlias}" -keyalg RSA -keysize 2048 -validity ${keystoreDetails.validity} -storepass "${keystoreDetails.keyPassword}" -keypass "${keystoreDetails.keyPassword}" -dname "CN=${keystoreDetails.name}, OU=${keystoreDetails.organizationUnit}, O=${keystoreDetails.organization}, L=${keystoreDetails.city}, S=${keystoreDetails.state}, C=${keystoreDetails.countryCode}"`;
+
     return new Promise((resolve, reject) => {
-        console.log('Building Flutter app...');
-        const buildCommand = 'flutter build apk';
+        exec(keytoolCommand, (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Error generating keystore: ${stderr}`);
+                reject(error);
+            } else {
+                console.log('Keystore generated successfully.');
+                resolve(keystorePath);
+            }
+        });
+    });
+}
+
+// Create key.properties file
+async function createKeyPropertiesFile(projectDir, keystorePath, keystoreDetails) {
+    const keyPropertiesPath = path.join(projectDir, 'android', 'key.properties');
+
+    const keystoreConfig = `
+storePassword=${keystoreDetails.keyPassword}
+keyPassword=${keystoreDetails.keyPassword}
+keyAlias=${keystoreDetails.keyAlias}
+storeFile=${keystorePath}
+`;
+
+    fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
+}
+
+// Build the Flutter app for Android (APK and AAB)
+function buildApp(projectDir, buildMode) {
+    return new Promise((resolve, reject) => {
+        console.log(`Building Flutter app in ${buildMode} mode...`);
+        let buildCommand = '';
+
+        if (buildMode === 'Release') {
+            buildCommand = 'flutter build apk --release && flutter build appbundle --release';
+        } else {
+            buildCommand = 'flutter build apk --debug';
+        }
+
         const flutterBuildProcess = exec(buildCommand, { cwd: projectDir });
 
         flutterBuildProcess.stdout.on('data', (data) => {
@@ -195,8 +361,8 @@ function buildApp(projectDir) {
     });
 }
 
-// Copy build outputs to a separate "shippable" folder
-function copyToShippableFolder(projectDir, folderName) {
+// Copy build outputs (APK and AAB) to a separate "shippable" folder
+function copyToShippableFolder(projectDir, folderName, buildMode) {
     console.log(`Preparing to copy build outputs to the shippable folder for "${folderName}"...`);
 
     const shippableAppDir = path.join(outputDir, folderName);
@@ -204,33 +370,74 @@ function copyToShippableFolder(projectDir, folderName) {
     // Ensure the shippable folder exists
     fs.ensureDirSync(shippableAppDir);
 
-    const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'release', 'app-release.apk');
-    console.log(`Checking Android APK at: ${androidApkPath}`);
+    if (buildMode === 'Release') {
+        // Copy APK
+        const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'release', 'app-release.apk');
+        console.log(`Checking Android APK at: ${androidApkPath}`);
+        if (fs.existsSync(androidApkPath)) {
+            fs.copyFileSync(androidApkPath, path.join(shippableAppDir, 'app-release.apk'));
+            console.log('Android APK copied to the shippable folder.');
+        } else {
+            console.error('Android APK not found!');
+        }
 
-    // Copy Android APK to shippable folder
-    if (fs.existsSync(androidApkPath)) {
-        fs.copyFileSync(androidApkPath, path.join(shippableAppDir, 'app-release.apk'));
-        console.log('Android APK copied to the shippable folder.');
+        // Copy AAB
+        const androidAabPath = path.join(projectDir, 'build', 'app', 'outputs', 'bundle', 'release', 'app-release.aab');
+        console.log(`Checking Android AAB at: ${androidAabPath}`);
+        if (fs.existsSync(androidAabPath)) {
+            fs.copyFileSync(androidAabPath, path.join(shippableAppDir, 'app-release.aab'));
+            console.log('Android AAB copied to the shippable folder.');
+        } else {
+            console.error('Android AAB not found!');
+        }
     } else {
-        console.error('Android APK not found!');
+        // Copy Debug APK
+        const androidApkPath = path.join(projectDir, 'build', 'app', 'outputs', 'apk', 'debug', 'app-debug.apk');
+        console.log(`Checking Android APK at: ${androidApkPath}`);
+        if (fs.existsSync(androidApkPath)) {
+            fs.copyFileSync(androidApkPath, path.join(shippableAppDir, 'app-debug.apk'));
+            console.log('Android APK copied to the shippable folder.');
+        } else {
+            console.error('Android APK not found!');
+        }
     }
 }
 
 // Main function to control the process
 async function main() {
-    const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
+    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
     try {
         const projectDir = await copyProject(flutterAppFolderPath, bundleName);
-        await updateAppIcon(projectDir);  // Update the app icon first
+        await updateAppIcon(projectDir);
 
         updateAndroidFiles(bundleName, appName, projectDir);
         updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
-        await buildApp(projectDir);  // Build the Android APK
+        if (buildMode === 'Release') {
+            const isKeytoolInstalled = await checkKeytoolInstalled();
+            if (!isKeytoolInstalled) {
+                console.error('Error: keytool is not installed on your system.');
+                console.log('keytool is required to generate a keystore for signing the app in release mode.');
+                console.log('Please install the Java Development Kit (JDK) to get keytool.');
+                console.log('Download JDK from: https://www.oracle.com/java/technologies/javase-jdk11-downloads.html');
+                process.exit(1);
+            }
+
+            // Generate keystore if it doesn't exist
+            const keystorePath = await generateKeystore(projectDir);
+
+            // Create key.properties file
+            await createKeyPropertiesFile(projectDir, keystorePath, {
+                keyAlias: 'my-key-alias',
+                keyPassword: 'your_keystore_password'
+            });
+        }
+
+        await buildApp(projectDir, buildMode);
 
         const folderName = convertBundleNameToFolderName(bundleName);
-        copyToShippableFolder(projectDir, folderName);  // Copy APK to the shippable folder
+        copyToShippableFolder(projectDir, folderName, buildMode);
 
         console.log('App is ready for deployment!');
     } catch (error) {
