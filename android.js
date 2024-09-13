@@ -77,7 +77,7 @@ async function prepareDirectory(folderPath) {
             type: 'confirm',
             name: 'confirmDelete',
             message: `The directory ${folderPath} already exists. Do you want to delete it and continue?`,
-            default: false
+            default: true
         });
 
         if (confirmDelete) {
