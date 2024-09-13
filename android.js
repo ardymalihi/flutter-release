@@ -137,39 +137,6 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
     buildGradle = buildGradle.replace(/applicationId "[^"]+"/, `applicationId "${bundleName}"`);
 
-    // Insert signing configurations if not present
-    if (!buildGradle.includes('signingConfigs')) {
-        const signingConfig = `
-        def keystoreProperties = new Properties()
-        def keystorePropertiesFile = rootProject.file('key.properties')
-        if (keystorePropertiesFile.exists()) {
-            keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-        }
-
-        android {
-            // ... existing configurations
-
-            signingConfigs {
-                release {
-                    keyAlias keystoreProperties['keyAlias']
-                    keyPassword keystoreProperties['keyPassword']
-                    storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
-                    storePassword keystoreProperties['storePassword']
-                }
-            }
-
-            buildTypes {
-                release {
-                    signingConfig signingConfigs.release
-                    minifyEnabled false
-                    shrinkResources false
-                    // ... existing configurations
-                }
-            }
-        }
-        `;
-        buildGradle = buildGradle.replace(/android\s*{/, signingConfig);
-    }
     fs.writeFileSync(buildGradlePath, buildGradle, 'utf8');
 
     const packageParts = bundleName.split('.');
@@ -218,7 +185,7 @@ const updateAppIcon = async (projectDir) => {
         }));
 
         console.log('Android app icons updated.');
-        
+
         // Additional steps can be added here for iOS or other platforms
     } else {
         console.log('No custom icon found. Using default Flutter app icon.');
@@ -227,7 +194,8 @@ const updateAppIcon = async (projectDir) => {
 
 // Generate the release keystore if it doesn't exist
 async function generateKeystore(projectDir) {
-    const keystorePath = path.join(projectDir, keystoreFileName);
+
+    const keystorePath = path.join(projectDir, 'android', keystoreFileName);
 
     if (await fs.pathExists(keystorePath)) {
         console.log('Keystore already exists. Skipping keystore generation.');
@@ -240,7 +208,7 @@ async function generateKeystore(projectDir) {
         {
             name: 'keyAlias',
             message: 'Enter a key alias for your keystore:',
-            default: 'my-key-alias'
+            default: 'ccp'
         },
         {
             type: 'password',
@@ -249,15 +217,6 @@ async function generateKeystore(projectDir) {
             mask: '*',
             validate: function (input) {
                 return input.length >= 6 || 'Password must be at least 6 characters long.';
-            }
-        },
-        {
-            type: 'password',
-            name: 'keyPasswordConfirm',
-            message: 'Confirm your keystore password:',
-            mask: '*',
-            validate: function (input, answers) {
-                return input === answers.keyPassword || 'Passwords do not match.';
             }
         },
         {
@@ -270,32 +229,50 @@ async function generateKeystore(projectDir) {
         },
         {
             name: 'name',
-            message: 'Enter your full name:'
+            message: 'Enter your full name:',
+            default: 'Ardalan Malihi'
         },
         {
             name: 'organizationUnit',
-            message: 'Enter your organizational unit:'
+            message: 'Enter your organizational unit:',
+            default: 'omix'
         },
         {
             name: 'organization',
-            message: 'Enter your organization:'
+            message: 'Enter your organization:',
+            default: 'omix'
         },
         {
             name: 'city',
-            message: 'Enter your city or locality:'
+            message: 'Enter your city or locality:',
+            default: 'Vancouver'
         },
         {
             name: 'state',
-            message: 'Enter your state or province:'
+            message: 'Enter your state or province:',
+            default: 'BC'
         },
         {
             name: 'countryCode',
             message: 'Enter your country code (e.g., US):',
+            default: 'CA',
             validate: function (input) {
                 return input.length === 2 || 'Country code must be 2 characters.';
             }
         }
     ]);
+
+    const keyPropertiesPath = path.join(projectDir, 'android', 'key.properties');
+
+    const keystoreConfig = `
+storePassword=${keystoreDetails.keyPassword}
+keyPassword=${keystoreDetails.keyPassword}
+keyAlias=${keystoreDetails.keyAlias}
+storeFile=${keystoreFileName}
+`;
+
+    fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
+
 
     // Build the keytool command
     const keytoolCommand = `keytool -genkeypair -v -keystore "${keystorePath}" -alias "${keystoreDetails.keyAlias}" -keyalg RSA -keysize 2048 -validity ${keystoreDetails.validity} -storepass "${keystoreDetails.keyPassword}" -keypass "${keystoreDetails.keyPassword}" -dname "CN=${keystoreDetails.name}, OU=${keystoreDetails.organizationUnit}, O=${keystoreDetails.organization}, L=${keystoreDetails.city}, S=${keystoreDetails.state}, C=${keystoreDetails.countryCode}"`;
@@ -311,20 +288,6 @@ async function generateKeystore(projectDir) {
             }
         });
     });
-}
-
-// Create key.properties file
-async function createKeyPropertiesFile(projectDir, keystorePath, keystoreDetails) {
-    const keyPropertiesPath = path.join(projectDir, 'android', 'key.properties');
-
-    const keystoreConfig = `
-storePassword=${keystoreDetails.keyPassword}
-keyPassword=${keystoreDetails.keyPassword}
-keyAlias=${keystoreDetails.keyAlias}
-storeFile=${keystorePath}
-`;
-
-    fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
 }
 
 // Build the Flutter app for Android (APK and AAB)
@@ -425,13 +388,8 @@ async function main() {
             }
 
             // Generate keystore if it doesn't exist
-            const keystorePath = await generateKeystore(projectDir);
+            await generateKeystore(projectDir);
 
-            // Create key.properties file
-            await createKeyPropertiesFile(projectDir, keystorePath, {
-                keyAlias: 'my-key-alias',
-                keyPassword: 'your_keystore_password'
-            });
         }
 
         await buildApp(projectDir, buildMode);
