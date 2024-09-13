@@ -195,99 +195,125 @@ const updateAppIcon = async (projectDir) => {
 // Generate the release keystore if it doesn't exist
 async function generateKeystore(projectDir) {
 
+    const defaultKeystorePath = path.join(__dirname, keystoreFileName);
     const keystorePath = path.join(projectDir, 'android', keystoreFileName);
 
-    if (await fs.pathExists(keystorePath)) {
-        console.log('Keystore already exists. Skipping keystore generation.');
-        return keystorePath;
-    }
-
-    console.log('Keystore not found. Generating a new keystore...');
-
-    const keystoreDetails = await inquirer.prompt([
-        {
-            name: 'keyAlias',
-            message: 'Enter a key alias for your keystore:',
-            default: 'ccp'
-        },
-        {
-            type: 'password',
-            name: 'keyPassword',
-            message: 'Enter a password for your keystore (at least 6 characters):',
-            mask: '*',
-            validate: function (input) {
-                return input.length >= 6 || 'Password must be at least 6 characters long.';
-            }
-        },
-        {
-            name: 'validity',
-            message: 'Enter the validity period (in days):',
-            default: '10000',
-            validate: function (input) {
-                return !isNaN(parseInt(input)) || 'Please enter a valid number.';
-            }
-        },
-        {
-            name: 'name',
-            message: 'Enter your full name:',
-            default: 'Ardalan Malihi'
-        },
-        {
-            name: 'organizationUnit',
-            message: 'Enter your organizational unit:',
-            default: 'omix'
-        },
-        {
-            name: 'organization',
-            message: 'Enter your organization:',
-            default: 'omix'
-        },
-        {
-            name: 'city',
-            message: 'Enter your city or locality:',
-            default: 'Vancouver'
-        },
-        {
-            name: 'state',
-            message: 'Enter your state or province:',
-            default: 'BC'
-        },
-        {
-            name: 'countryCode',
-            message: 'Enter your country code (e.g., US):',
-            default: 'CA',
-            validate: function (input) {
-                return input.length === 2 || 'Country code must be 2 characters.';
-            }
-        }
-    ]);
-
+    const defaultKeyPropertiesPath = path.join(__dirname, 'key.properties');
     const keyPropertiesPath = path.join(projectDir, 'android', 'key.properties');
 
-    const keystoreConfig = `
-storePassword=${keystoreDetails.keyPassword}
-keyPassword=${keystoreDetails.keyPassword}
-keyAlias=${keystoreDetails.keyAlias}
-storeFile=../${keystoreFileName}
-`;
-
-    fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
-
-
-    // Build the keytool command
-    const keytoolCommand = `keytool -genkeypair -v -keystore "${keystorePath}" -alias "${keystoreDetails.keyAlias}" -keyalg RSA -keysize 2048 -validity ${keystoreDetails.validity} -storepass "${keystoreDetails.keyPassword}" -keypass "${keystoreDetails.keyPassword}" -dname "CN=${keystoreDetails.name}, OU=${keystoreDetails.organizationUnit}, O=${keystoreDetails.organization}, L=${keystoreDetails.city}, S=${keystoreDetails.state}, C=${keystoreDetails.countryCode}"`;
-
-    return new Promise((resolve, reject) => {
-        exec(keytoolCommand, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`Error generating keystore: ${stderr}`);
-                reject(error);
-            } else {
-                console.log('Keystore generated successfully.');
-                resolve(keystorePath);
+    if (await fs.pathExists(defaultKeystorePath)) {
+        console.log('Keystore already exists. Skipping keystore generation.');
+        fs.copyFile(defaultKeystorePath, keystorePath, (err) => {
+            if (err) {
+              console.error('Error copying the keystore file:', err);
+              return;
             }
+            console.log('Keystore file copied successfully to:', keystorePath);
+          });
+        fs.copyFile(defaultKeyPropertiesPath, keyPropertiesPath, (err) => {
+            if (err) {
+              console.error('Error copying the key properties file:', err);
+              return;
+            }
+            console.log('Key properties file copied successfully to:', keystorePath);
+          });
+    } else {
+        console.log('Keystore not found. Generating a new keystore...');
+
+        const keystoreDetails = await inquirer.prompt([
+            {
+                name: 'keyAlias',
+                message: 'Enter a key alias for your keystore:',
+                default: 'ccp'
+            },
+            {
+                type: 'password',
+                name: 'keyPassword',
+                message: 'Enter a password for your keystore (at least 6 characters):',
+                mask: '*',
+                validate: function (input) {
+                    return input.length >= 6 || 'Password must be at least 6 characters long.';
+                }
+            },
+            {
+                name: 'validity',
+                message: 'Enter the validity period (in days):',
+                default: '10000',
+                validate: function (input) {
+                    return !isNaN(parseInt(input)) || 'Please enter a valid number.';
+                }
+            },
+            {
+                name: 'name',
+                message: 'Enter your full name:',
+                default: 'Ardalan Malihi'
+            },
+            {
+                name: 'organizationUnit',
+                message: 'Enter your organizational unit:',
+                default: 'omix'
+            },
+            {
+                name: 'organization',
+                message: 'Enter your organization:',
+                default: 'omix'
+            },
+            {
+                name: 'city',
+                message: 'Enter your city or locality:',
+                default: 'Vancouver'
+            },
+            {
+                name: 'state',
+                message: 'Enter your state or province:',
+                default: 'BC'
+            },
+            {
+                name: 'countryCode',
+                message: 'Enter your country code (e.g., US):',
+                default: 'CA',
+                validate: function (input) {
+                    return input.length === 2 || 'Country code must be 2 characters.';
+                }
+            }
+        ]);
+    
+        const keyPropertiesPath = path.join(projectDir, 'android', 'key.properties');
+    
+        const keystoreConfig = `
+    storePassword=${keystoreDetails.keyPassword}
+    keyPassword=${keystoreDetails.keyPassword}
+    keyAlias=${keystoreDetails.keyAlias}
+    storeFile=../${keystoreFileName}
+    `;
+    
+        fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
+    
+    
+        // Build the keytool command
+        const keytoolCommand = `keytool -genkeypair -v -keystore "${defaultKeystorePath}" -alias "${keystoreDetails.keyAlias}" -keyalg RSA -keysize 2048 -validity ${keystoreDetails.validity} -storepass "${keystoreDetails.keyPassword}" -keypass "${keystoreDetails.keyPassword}" -dname "CN=${keystoreDetails.name}, OU=${keystoreDetails.organizationUnit}, O=${keystoreDetails.organization}, L=${keystoreDetails.city}, S=${keystoreDetails.state}, C=${keystoreDetails.countryCode}"`;
+    
+        return new Promise((resolve, reject) => {
+            exec(keytoolCommand, (error, stdout, stderr) => {
+                if (error) {
+                    console.error(`Error generating keystore: ${stderr}`);
+                    reject(error);
+                } else {
+                    console.log('Keystore generated successfully.');
+                    fs.copyFile(defaultKeystorePath, keystorePath, (err) => {
+                        if (err) {
+                          console.error('Error copying the keystore file:', err);
+                          return;
+                        }
+                        console.log('Keystore file copied successfully to:', keystorePath);
+                      });
+                    resolve(defaultKeystorePath);
+                }
+            });
         });
-    });
+    }
+
+    
 }
 
 // Build the Flutter app for Android (APK and AAB)

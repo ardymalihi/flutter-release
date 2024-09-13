@@ -135,3 +135,7 @@ shippable
 
 # icon logo
 icon.png
+
+#signing 
+key.properties
+my-release-key.jks
