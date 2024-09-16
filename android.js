@@ -26,6 +26,8 @@ function checkKeytoolInstalled() {
 
 // Prompt user for app settings and the Flutter app folder name
 async function promptUser() {
+    const currentTimestampInSeconds = Math.floor(Date.now() / 1000);  // Unix timestamp in seconds
+
     const answers = await inquirer.prompt([
         {
             type: 'list',
@@ -65,6 +67,21 @@ async function promptUser() {
             name: 'apiUrl',
             message: 'Enter the API_URL:',
             default: 'https://prep-admin.vercel.app'
+        },
+        {
+            name: 'versionName',
+            message: 'Enter the app version (e.g., 1.0.0):',
+            default: '1.0.0',
+            when: (answers) => answers.buildMode === 'Release'  // Only ask in Release mode
+        },
+        {
+            name: 'versionCode',
+            message: 'Enter the app version code:',
+            default: currentTimestampInSeconds.toString(),  // Use Unix timestamp in seconds as default
+            validate: function (input) {
+                return !isNaN(parseInt(input)) || 'Version code must be a number.';
+            },
+            when: (answers) => answers.buildMode === 'Release'  // Only ask in Release mode
         }
     ]);
     return answers;
@@ -185,16 +202,25 @@ const updateAppIcon = async (projectDir) => {
         }));
 
         console.log('Android app icons updated.');
-
-        // Additional steps can be added here for iOS or other platforms
     } else {
         console.log('No custom icon found. Using default Flutter app icon.');
     }
 };
 
+// Update pubspec.yaml with versionName and versionCode
+function updatePubspecVersion(versionName, versionCode, projectDir) {
+    const pubspecPath = path.join(projectDir, 'pubspec.yaml');
+    let pubspecContent = fs.readFileSync(pubspecPath, 'utf8');
+
+    const versionRegex = /version:\s*([0-9.]+)\+([0-9]+)/;
+    pubspecContent = pubspecContent.replace(versionRegex, `version: ${versionName}+${versionCode}`);
+
+    fs.writeFileSync(pubspecPath, pubspecContent, 'utf8');
+    console.log(`Updated pubspec.yaml with version: ${versionName}+${versionCode}`);
+}
+
 // Generate the release keystore if it doesn't exist
 async function generateKeystore(projectDir) {
-
     const defaultKeystorePath = path.join(__dirname, keystoreFileName);
     const keystorePath = path.join(projectDir, 'android', keystoreFileName);
 
@@ -205,18 +231,18 @@ async function generateKeystore(projectDir) {
         console.log('Keystore already exists. Skipping keystore generation.');
         fs.copyFile(defaultKeystorePath, keystorePath, (err) => {
             if (err) {
-              console.error('Error copying the keystore file:', err);
-              return;
+                console.error('Error copying the keystore file:', err);
+                return;
             }
             console.log('Keystore file copied successfully to:', keystorePath);
-          });
+        });
         fs.copyFile(defaultKeyPropertiesPath, keyPropertiesPath, (err) => {
             if (err) {
-              console.error('Error copying the key properties file:', err);
-              return;
+                console.error('Error copying the key properties file:', err);
+                return;
             }
             console.log('Key properties file copied successfully to:', keystorePath);
-          });
+        });
     } else {
         console.log('Keystore not found. Generating a new keystore...');
 
@@ -277,22 +303,20 @@ async function generateKeystore(projectDir) {
                 }
             }
         ]);
-    
+
         const keyPropertiesPath = path.join(projectDir, 'android', 'key.properties');
-    
+
         const keystoreConfig = `
-    storePassword=${keystoreDetails.keyPassword}
-    keyPassword=${keystoreDetails.keyPassword}
-    keyAlias=${keystoreDetails.keyAlias}
-    storeFile=../${keystoreFileName}
-    `;
-    
+        storePassword=${keystoreDetails.keyPassword}
+        keyPassword=${keystoreDetails.keyPassword}
+        keyAlias=${keystoreDetails.keyAlias}
+        storeFile=../${keystoreFileName}
+        `;
+
         fs.writeFileSync(keyPropertiesPath, keystoreConfig.trim(), 'utf8');
-    
-    
-        // Build the keytool command
+
         const keytoolCommand = `keytool -genkeypair -v -keystore "${defaultKeystorePath}" -alias "${keystoreDetails.keyAlias}" -keyalg RSA -keysize 2048 -validity ${keystoreDetails.validity} -storepass "${keystoreDetails.keyPassword}" -keypass "${keystoreDetails.keyPassword}" -dname "CN=${keystoreDetails.name}, OU=${keystoreDetails.organizationUnit}, O=${keystoreDetails.organization}, L=${keystoreDetails.city}, S=${keystoreDetails.state}, C=${keystoreDetails.countryCode}"`;
-    
+
         return new Promise((resolve, reject) => {
             exec(keytoolCommand, (error, stdout, stderr) => {
                 if (error) {
@@ -302,18 +326,16 @@ async function generateKeystore(projectDir) {
                     console.log('Keystore generated successfully.');
                     fs.copyFile(defaultKeystorePath, keystorePath, (err) => {
                         if (err) {
-                          console.error('Error copying the keystore file:', err);
-                          return;
+                            console.error('Error copying the keystore file:', err);
+                            return;
                         }
                         console.log('Keystore file copied successfully to:', keystorePath);
-                      });
+                    });
                     resolve(defaultKeystorePath);
                 }
             });
         });
     }
-
-    
 }
 
 // Build the Flutter app for Android (APK and AAB)
@@ -394,8 +416,9 @@ function copyToShippableFolder(projectDir, folderName, buildMode) {
 
 // Main function to control the process
 async function main() {
-    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl } = await promptUser();
+    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, versionName, versionCode } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
+    
     try {
         const projectDir = await copyProject(flutterAppFolderPath, bundleName);
         await updateAppIcon(projectDir);
@@ -403,19 +426,21 @@ async function main() {
         updateAndroidFiles(bundleName, appName, projectDir);
         updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
+        // Conditionally update the version in pubspec.yaml if in Release mode
         if (buildMode === 'Release') {
+            console.log('Release mode selected. Updating app version...');
+            updatePubspecVersion(versionName, versionCode, projectDir);
+
             const isKeytoolInstalled = await checkKeytoolInstalled();
             if (!isKeytoolInstalled) {
                 console.error('Error: keytool is not installed on your system.');
-                console.log('keytool is required to generate a keystore for signing the app in release mode.');
-                console.log('Please install the Java Development Kit (JDK) to get keytool.');
-                console.log('Download JDK from: https://www.oracle.com/java/technologies/javase-jdk11-downloads.html');
                 process.exit(1);
             }
 
             // Generate keystore if it doesn't exist
             await generateKeystore(projectDir);
-
+        } else {
+            console.log('Debug mode selected. Skipping version update.');
         }
 
         await buildApp(projectDir, buildMode);
