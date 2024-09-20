@@ -69,6 +69,11 @@ async function promptUser() {
             default: 'https://prep-admin.vercel.app'
         },
         {
+            name: 'androidProductId',
+            message: 'Enter the ANDROID_PRODUCT_ID:',
+            default: 'com.prepto.ccp.premium_access'
+        },
+        {
             name: 'versionName',
             message: 'Enter the app version (e.g., 1.0.0):',
             default: '1.0.0',
@@ -170,11 +175,12 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
 }
 
 // Update environment variables or configuration files
-function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
+function updateConfigFiles(offlineCategoryId, apiUrl, androidProductId, projectDir) {
     const configFilePath = path.join(projectDir, 'lib', 'config.dart');
     let configContent = fs.readFileSync(configFilePath, 'utf8');
     configContent = configContent.replace(/const int OFFLINE_CATEGORY_ID = [^;]*;/, `const int OFFLINE_CATEGORY_ID = ${offlineCategoryId};`);
     configContent = configContent.replace(/const String API_URL = '[^']*';/, `const String API_URL = '${apiUrl}';`);
+    configContent = configContent.replace(/const String ANDROID_PRODUCT_ID = '[^']*';/, `const String ANDROID_PRODUCT_ID = '${androidProductId}';`);
     fs.writeFileSync(configFilePath, configContent, 'utf8');
 }
 
@@ -416,7 +422,7 @@ function copyToShippableFolder(projectDir, folderName, buildMode) {
 
 // Main function to control the process
 async function main() {
-    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, versionName, versionCode } = await promptUser();
+    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, androidProductId, versionName, versionCode } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
     
     try {
@@ -424,7 +430,7 @@ async function main() {
         await updateAppIcon(projectDir);
 
         updateAndroidFiles(bundleName, appName, projectDir);
-        updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
+        updateConfigFiles(offlineCategoryId, apiUrl, androidProductId, projectDir);
 
         // Conditionally update the version in pubspec.yaml if in Release mode
         if (buildMode === 'Release') {
