@@ -40,7 +40,7 @@ async function promptUser() {
         {
             name: 'apiUrl',
             message: 'Enter the API_URL:',
-            default: 'https://prep-admin.vercel.app'
+            default: 'https://www.prepto.pro'
         },
         {
             name: 'teamId',
