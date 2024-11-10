@@ -14,6 +14,17 @@
             "program": "${workspaceFolder}/android.js",
             "console": "integratedTerminal",
             "outputCapture": "std"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "IOS",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/ios.js",
+            "console": "integratedTerminal",
+            "outputCapture": "std"
         }
     ]
 }

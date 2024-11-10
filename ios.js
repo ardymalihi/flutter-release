@@ -4,11 +4,19 @@ const path = require('path');
 const { exec } = require('child_process');
 const sharp = require('sharp');
 
+// Define the output directory for shippable builds
 const outputDir = path.join(__dirname, 'shippable_ios');
 
 // Prompt user for iOS-specific settings
 async function promptUser() {
     const answers = await inquirer.prompt([
+        {
+            type: 'list',
+            name: 'buildMode',
+            message: 'Select the build mode:',
+            choices: ['Debug', 'Release'],
+            default: 'Debug'
+        },
         {
             name: 'flutterAppFolderName',
             message: 'Enter the name or path of your Flutter app folder:',
@@ -46,7 +54,8 @@ async function promptUser() {
         {
             name: 'versionName',
             message: 'Enter the app version (e.g., 1.0.0):',
-            default: '1.0.0'
+            default: '1.0.0',
+            when: (answers) => answers.buildMode === 'Release'  // Only ask in Release mode
         }
     ]);
     return answers;
@@ -113,10 +122,16 @@ function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
 }
 
 // Build the iOS app with xcodebuild
-function buildIOSApp(projectDir) {
-    console.log('Building iOS app...');
+function buildIOSApp(projectDir, buildMode) {
+    console.log(`Building iOS app in ${buildMode} mode...`);
     return new Promise((resolve, reject) => {
-        const buildCommand = 'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphoneos -configuration Release archive -archivePath ios/Runner.xcarchive -allowProvisioningUpdates';
+        let buildCommand = '';
+        if (buildMode === 'Release') {
+            buildCommand = 'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphoneos -configuration Release archive -archivePath ios/Runner.xcarchive -allowProvisioningUpdates';
+        } else {
+            buildCommand = 'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphonesimulator -configuration Debug';
+        }
+
         const xcodeBuildProcess = exec(buildCommand, { cwd: projectDir });
 
         xcodeBuildProcess.stdout.on('data', (data) => console.log(data.toString()));
@@ -133,9 +148,29 @@ function buildIOSApp(projectDir) {
     });
 }
 
+// Copy build outputs to a separate "shippable" folder
+function copyToShippableFolder(projectDir, buildMode) {
+    console.log(`Preparing to copy build outputs to the shippable folder...`);
+    const shippableAppDir = path.join(outputDir);
+
+    // Ensure the shippable folder exists
+    fs.ensureDirSync(shippableAppDir);
+
+    const buildOutputPath = buildMode === 'Release'
+        ? path.join(projectDir, 'ios', 'Runner.xcarchive')
+        : path.join(projectDir, 'build', 'ios', 'iphonesimulator', 'Runner.app');
+
+    if (fs.existsSync(buildOutputPath)) {
+        fs.copySync(buildOutputPath, path.join(shippableAppDir, buildMode === 'Release' ? 'Runner.xcarchive' : 'Runner.app'));
+        console.log('Build output copied to the shippable folder.');
+    } else {
+        console.error('Build output not found!');
+    }
+}
+
 // Main function to control the process
 async function main() {
-    const { flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId, versionName } = await promptUser();
+    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId, versionName } = await promptUser();
     const flutterAppFolderPath = path.resolve(__dirname, '..', flutterAppFolderName);
     
     try {
@@ -144,14 +179,18 @@ async function main() {
         updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, teamId);
         updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
-        console.log('Release mode selected. Setting version...');
-        const pubspecPath = path.join(projectDir, 'pubspec.yaml');
-        let pubspecContent = fs.readFileSync(pubspecPath, 'utf8');
-        pubspecContent = pubspecContent.replace(/version:\s*([0-9.]+)\+([0-9]+)/, `version: ${versionName}`);
-        fs.writeFileSync(pubspecPath, pubspecContent, 'utf8');
-        console.log(`Updated pubspec.yaml with version: ${versionName}`);
+        // Conditionally update the version in pubspec.yaml if in Release mode
+        if (buildMode === 'Release') {
+            console.log('Release mode selected. Setting version...');
+            const pubspecPath = path.join(projectDir, 'pubspec.yaml');
+            let pubspecContent = fs.readFileSync(pubspecPath, 'utf8');
+            pubspecContent = pubspecContent.replace(/version:\s*([0-9.]+)\+([0-9]+)/, `version: ${versionName}`);
+            fs.writeFileSync(pubspecPath, pubspecContent, 'utf8');
+            console.log(`Updated pubspec.yaml with version: ${versionName}`);
+        }
 
-        await buildIOSApp(projectDir);
+        await buildIOSApp(projectDir, buildMode);
+        copyToShippableFolder(projectDir, buildMode);
         console.log('iOS app is ready for deployment!');
     } catch (error) {
         console.error('An error occurred:', error.message);
