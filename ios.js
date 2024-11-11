@@ -7,6 +7,9 @@ const sharp = require('sharp');
 // Define the output directory for shippable builds
 const outputDir = path.join(__dirname, 'shippable_ios');
 
+// Define the parent directory for sibling folders
+const parentDir = path.resolve(__dirname, '..');
+
 // Prompt user for iOS-specific settings
 async function promptUser() {
     const answers = await inquirer.prompt([
@@ -47,9 +50,9 @@ async function promptUser() {
             default: 'https://www.prepto.pro'
         },
         {
-            name: 'teamId',
-            message: 'Enter your Apple Development Team ID:',
-            default: 'ZBWAG62J88'
+            name: 'deploymentTarget',
+            message: 'Enter the iOS deployment target (e.g., 12.0):',
+            default: '12.0'
         },
         {
             name: 'versionName',
@@ -61,10 +64,58 @@ async function promptUser() {
     return answers;
 }
 
+// Determine if the flutterAppFolderName is a path or a folder name
+function resolveFlutterAppPath(flutterAppFolderName) {
+    if (path.isAbsolute(flutterAppFolderName) || flutterAppFolderName.includes('/')) {
+        return path.resolve(flutterAppFolderName); // Treat as a full path
+    } else {
+        return path.join(parentDir, flutterAppFolderName); // Treat as a sibling folder
+    }
+}
+
+// Convert the bundle name to a folder name
+function convertBundleNameToFolderName(bundleName) {
+    return bundleName.replace(/\./g, '_');
+}
+
+// Create a copy of the project based on the bundle name
+async function copyProject(flutterAppFolderPath, bundleName) {
+    const folderName = convertBundleNameToFolderName(bundleName);
+    const appDir = path.join(outputDir, folderName);
+
+    await prepareDirectory(appDir); // Check and prepare the directory before copying
+
+    console.log(`Creating a copy of the project in folder "${folderName}"...`);
+    await fs.copy(flutterAppFolderPath, appDir);
+    console.log('Project copy created.');
+    return appDir;
+}
+
+// Check and prepare the directory for copying the project
+async function prepareDirectory(folderPath) {
+    if (await fs.pathExists(folderPath)) {
+        const { confirmDelete } = await inquirer.prompt({
+            type: 'confirm',
+            name: 'confirmDelete',
+            message: `The directory ${folderPath} already exists. Do you want to delete it and continue?`,
+            default: true
+        });
+
+        if (confirmDelete) {
+            await fs.remove(folderPath);
+            console.log(`Deleted existing directory: ${folderPath}`);
+        } else {
+            throw new Error('Operation cancelled by user.');
+        }
+    }
+}
+
 // Function to update iOS files and setup xcconfig for automated signing
-function updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, teamId) {
+function updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, deploymentTarget) {
     const infoPlistPath = path.join(projectDir, 'ios', 'Runner', 'Info.plist');
     const xcconfigPath = path.join(projectDir, 'ios', 'config', 'build.xcconfig');
+    const podfilePath = path.join(projectDir, 'ios', 'Podfile');
+    const xcodeprojPath = path.join(projectDir, 'ios', 'Runner.xcodeproj', 'project.pbxproj');
 
     let infoPlistContent = fs.readFileSync(infoPlistPath, 'utf8');
     infoPlistContent = infoPlistContent.replace(/<key>CFBundleIdentifier<\/key>\s*<string>[^<]+<\/string>/, `<key>CFBundleIdentifier</key><string>${bundleName}</string>`);
@@ -73,13 +124,31 @@ function updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, teamId) 
 
     const xcconfigContent = `
 CODE_SIGN_STYLE = Automatic
-DEVELOPMENT_TEAM = ${teamId}
+DEVELOPMENT_TEAM = ZBWAG62J88
 CODE_SIGN_IDENTITY = iPhone Developer
     `;
     fs.ensureDirSync(path.dirname(xcconfigPath));
     fs.writeFileSync(xcconfigPath, xcconfigContent.trim(), 'utf8');
 
-    console.log('iOS Info.plist and signing configuration updated.');
+    if (fs.existsSync(podfilePath)) {
+        let podfileContent = fs.readFileSync(podfilePath, 'utf8');
+        podfileContent = podfileContent.replace(/platform :ios, '[^']*'/, `platform :ios, '${deploymentTarget}'`);
+        fs.writeFileSync(podfilePath, podfileContent, 'utf8');
+        console.log(`Updated Podfile with iOS deployment target: ${deploymentTarget}`);
+    }
+
+    if (fs.existsSync(xcodeprojPath)) {
+        let xcodeprojContent = fs.readFileSync(xcodeprojPath, 'utf8');
+        xcodeprojContent = xcodeprojContent.replace(/DEVELOPMENT_TEAM = [A-Z0-9]+;/g, `DEVELOPMENT_TEAM = ZBWAG62J88;`);
+        xcodeprojContent = xcodeprojContent.replace(/CODE_SIGN_STYLE = [a-zA-Z]+;/g, `CODE_SIGN_STYLE = Automatic;`);
+        xcodeprojContent = xcodeprojContent.replace(/"CODE_SIGN_IDENTITY" = "[^"]*";/g, `"CODE_SIGN_IDENTITY" = "Apple Development";`);
+        xcodeprojContent = xcodeprojContent.replace(/\s*\*\/\*\sPrivacyInfo\.xcprivacy\s\*\/;/g, ''); // Remove PrivacyInfo.xcprivacy references
+        xcodeprojContent = xcodeprojContent.replace(/\s*\/\*\sPrivacyInfo\.xcprivacy\s\*\/;\s*\/\*\sPBXBuildFile\s\*\/;/g, ''); // Remove PrivacyInfo.xcprivacy PBXBuildFile references
+        fs.writeFileSync(xcodeprojPath, xcodeprojContent, 'utf8');
+        console.log('Updated Xcode project file with development team ID, code signing settings, and removed PrivacyInfo.xcprivacy references.');
+    }
+
+    console.log('iOS Info.plist, signing configuration, Podfile, and Xcode project file updated.');
 }
 
 // Function to update iOS app icons
@@ -132,17 +201,45 @@ function buildIOSApp(projectDir, buildMode) {
             buildCommand = 'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphonesimulator -configuration Debug';
         }
 
-        const xcodeBuildProcess = exec(buildCommand, { cwd: projectDir });
+        exec('rm -rf ~/Library/Developer/Xcode/DerivedData', (error, stdout, stderr) => {
+            if (error) {
+                console.error(`Error removing DerivedData: ${stderr}`);
+            } else {
+                console.log('Successfully removed DerivedData');
+            }
 
-        xcodeBuildProcess.stdout.on('data', (data) => console.log(data.toString()));
-        xcodeBuildProcess.stderr.on('data', (data) => console.error(data.toString()));
-        xcodeBuildProcess.on('close', (code) => {
+            const xcodeBuildProcess = exec(buildCommand, { cwd: projectDir });
+
+            xcodeBuildProcess.stdout.on('data', (data) => console.log(data.toString()));
+            xcodeBuildProcess.stderr.on('data', (data) => console.error(data.toString()));
+            xcodeBuildProcess.on('close', (code) => {
+                if (code === 0) {
+                    console.log('iOS build completed successfully.');
+                    resolve();
+                } else {
+                    console.error('iOS build process failed.');
+                    reject(new Error('iOS build process exited with errors.'));
+                }
+            });
+        });
+    });
+}
+
+// Install CocoaPods dependencies
+function installCocoaPods(projectDir) {
+    console.log('Installing CocoaPods dependencies...');
+    return new Promise((resolve, reject) => {
+        const installProcess = exec('pod install', { cwd: path.join(projectDir, 'ios') });
+
+        installProcess.stdout.on('data', (data) => console.log(data.toString()));
+        installProcess.stderr.on('data', (data) => console.error(data.toString()));
+        installProcess.on('close', (code) => {
             if (code === 0) {
-                console.log('iOS build completed successfully.');
+                console.log('CocoaPods dependencies installed successfully.');
                 resolve();
             } else {
-                console.error('iOS build process failed.');
-                reject(new Error('iOS build process exited with errors.'));
+                console.error('CocoaPods installation failed.');
+                reject(new Error('CocoaPods installation process exited with errors.'));
             }
         });
     });
@@ -170,14 +267,17 @@ function copyToShippableFolder(projectDir, buildMode) {
 
 // Main function to control the process
 async function main() {
-    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, teamId, versionName } = await promptUser();
-    const flutterAppFolderPath = path.resolve(__dirname, '..', flutterAppFolderName);
+    const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, deploymentTarget, versionName } = await promptUser();
+    const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
     
     try {
-        const projectDir = flutterAppFolderPath;
+        const projectDir = await copyProject(flutterAppFolderPath, bundleName);
         await updateIOSAppIcons(flutterAppFolderPath, projectDir);
-        updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, teamId);
+        updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, deploymentTarget);
         updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
+
+        // Install CocoaPods dependencies
+        await installCocoaPods(projectDir);
 
         // Conditionally update the version in pubspec.yaml if in Release mode
         if (buildMode === 'Release') {
