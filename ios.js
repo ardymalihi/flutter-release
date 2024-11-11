@@ -118,8 +118,8 @@ function updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, deployme
     const xcodeprojPath = path.join(projectDir, 'ios', 'Runner.xcodeproj', 'project.pbxproj');
 
     let infoPlistContent = fs.readFileSync(infoPlistPath, 'utf8');
-    infoPlistContent = infoPlistContent.replace(/<key>CFBundleIdentifier<\/key>\s*<string>[^<]+<\/string>/, `<key>CFBundleIdentifier</key><string>${bundleName}</string>`);
-    infoPlistContent = infoPlistContent.replace(/<key>CFBundleName<\/key>\s*<string>[^<]+<\/string>/, `<key>CFBundleName</key><string>${appName}</string>`);
+    infoPlistContent = infoPlistContent.replace(/<key>CFBundleIdentifier<\/key>\s*<string>[^<]+<\/string>/, `<key>CFBundleIdentifier<\/key><string>${bundleName}<\/string>`);
+    infoPlistContent = infoPlistContent.replace(/<key>CFBundleName<\/key>\s*<string>[^<]+<\/string>/, `<key>CFBundleName<\/key><string>${appName}<\/string>`);
     fs.writeFileSync(infoPlistPath, infoPlistContent, 'utf8');
 
     const xcconfigContent = `
@@ -142,8 +142,8 @@ CODE_SIGN_IDENTITY = iPhone Developer
         xcodeprojContent = xcodeprojContent.replace(/DEVELOPMENT_TEAM = [A-Z0-9]+;/g, `DEVELOPMENT_TEAM = ZBWAG62J88;`);
         xcodeprojContent = xcodeprojContent.replace(/CODE_SIGN_STYLE = [a-zA-Z]+;/g, `CODE_SIGN_STYLE = Automatic;`);
         xcodeprojContent = xcodeprojContent.replace(/"CODE_SIGN_IDENTITY" = "[^"]*";/g, `"CODE_SIGN_IDENTITY" = "Apple Development";`);
-        xcodeprojContent = xcodeprojContent.replace(/\s*\*\/\*\sPrivacyInfo\.xcprivacy\s\*\/;/g, ''); // Remove PrivacyInfo.xcprivacy references
-        xcodeprojContent = xcodeprojContent.replace(/\s*\/\*\sPrivacyInfo\.xcprivacy\s\*\/;\s*\/\*\sPBXBuildFile\s\*\/;/g, ''); // Remove PrivacyInfo.xcprivacy PBXBuildFile references
+        xcodeprojContent = xcodeprojContent.replace(/\s*\*\/\*\sPrivacyInfo\.xcprivacy\s\*\//g, ''); // Remove PrivacyInfo.xcprivacy references
+        xcodeprojContent = xcodeprojContent.replace(/\s*\/\*\sPrivacyInfo\.xcprivacy\s\*\/;\s*\/\*\sPBXBuildFile\s\*\//g, ''); // Remove PrivacyInfo.xcprivacy PBXBuildFile references
         fs.writeFileSync(xcodeprojPath, xcodeprojContent, 'utf8');
         console.log('Updated Xcode project file with development team ID, code signing settings, and removed PrivacyInfo.xcprivacy references.');
     }
@@ -190,6 +190,47 @@ function updateConfigFiles(offlineCategoryId, apiUrl, projectDir) {
     fs.writeFileSync(configFilePath, configContent, 'utf8');
 }
 
+// Remove installed package libraries
+async function removePackages(projectDir) {
+    console.log('Removing existing installed packages...');
+    try {
+        const pubspecLockPath = path.join(projectDir, 'pubspec.lock');
+        const podsDir = path.join(projectDir, 'ios', 'Pods');
+
+        if (await fs.pathExists(pubspecLockPath)) {
+            await fs.remove(pubspecLockPath);
+            console.log('Removed pubspec.lock');
+        }
+
+        if (await fs.pathExists(podsDir)) {
+            await fs.remove(podsDir);
+            console.log('Removed ios/Pods directory');
+        }
+    } catch (error) {
+        throw new Error(`Failed to remove existing packages: ${error.message}`);
+    }
+}
+
+// Run flutter pub get to install package dependencies
+async function runFlutterPubGet(projectDir) {
+    console.log('Running flutter pub get to install package dependencies...');
+    return new Promise((resolve, reject) => {
+        const flutterGetProcess = exec('flutter pub get', { cwd: projectDir });
+
+        flutterGetProcess.stdout.on('data', (data) => console.log(data.toString()));
+        flutterGetProcess.stderr.on('data', (data) => console.error(data.toString()));
+        flutterGetProcess.on('close', (code) => {
+            if (code === 0) {
+                console.log('flutter pub get completed successfully.');
+                resolve();
+            } else {
+                console.error('flutter pub get failed.');
+                reject(new Error('flutter pub get process exited with errors.'));
+            }
+        });
+    });
+}
+
 // Build the iOS app with xcodebuild
 function buildIOSApp(projectDir, buildMode) {
     console.log(`Building iOS app in ${buildMode} mode...`);
@@ -201,45 +242,17 @@ function buildIOSApp(projectDir, buildMode) {
             buildCommand = 'xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner -sdk iphonesimulator -configuration Debug';
         }
 
-        exec('rm -rf ~/Library/Developer/Xcode/DerivedData', (error, stdout, stderr) => {
-            if (error) {
-                console.error(`Error removing DerivedData: ${stderr}`);
-            } else {
-                console.log('Successfully removed DerivedData');
-            }
+        const xcodeBuildProcess = exec(buildCommand, { cwd: projectDir });
 
-            const xcodeBuildProcess = exec(buildCommand, { cwd: projectDir });
-
-            xcodeBuildProcess.stdout.on('data', (data) => console.log(data.toString()));
-            xcodeBuildProcess.stderr.on('data', (data) => console.error(data.toString()));
-            xcodeBuildProcess.on('close', (code) => {
-                if (code === 0) {
-                    console.log('iOS build completed successfully.');
-                    resolve();
-                } else {
-                    console.error('iOS build process failed.');
-                    reject(new Error('iOS build process exited with errors.'));
-                }
-            });
-        });
-    });
-}
-
-// Install CocoaPods dependencies
-function installCocoaPods(projectDir) {
-    console.log('Installing CocoaPods dependencies...');
-    return new Promise((resolve, reject) => {
-        const installProcess = exec('pod install', { cwd: path.join(projectDir, 'ios') });
-
-        installProcess.stdout.on('data', (data) => console.log(data.toString()));
-        installProcess.stderr.on('data', (data) => console.error(data.toString()));
-        installProcess.on('close', (code) => {
+        xcodeBuildProcess.stdout.on('data', (data) => console.log(data.toString()));
+        xcodeBuildProcess.stderr.on('data', (data) => console.error(data.toString()));
+        xcodeBuildProcess.on('close', (code) => {
             if (code === 0) {
-                console.log('CocoaPods dependencies installed successfully.');
+                console.log('iOS build completed successfully.');
                 resolve();
             } else {
-                console.error('CocoaPods installation failed.');
-                reject(new Error('CocoaPods installation process exited with errors.'));
+                console.error('iOS build process failed.');
+                reject(new Error('iOS build process exited with errors.'));
             }
         });
     });
@@ -276,8 +289,8 @@ async function main() {
         updateIOSFilesAndSetupSigning(bundleName, appName, projectDir, deploymentTarget);
         updateConfigFiles(offlineCategoryId, apiUrl, projectDir);
 
-        // Install CocoaPods dependencies
-        await installCocoaPods(projectDir);
+        await removePackages(projectDir); // Remove installed packages
+        await runFlutterPubGet(projectDir); // Run flutter pub get
 
         // Conditionally update the version in pubspec.yaml if in Release mode
         if (buildMode === 'Release') {
