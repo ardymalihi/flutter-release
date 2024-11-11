@@ -132,6 +132,7 @@ dist
 
 # shippable
 shippable
+shippable_ios
 
 # icon logo
 icon.png
