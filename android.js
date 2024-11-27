@@ -144,25 +144,30 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     const buildGradlePath = path.join(projectDir, 'android', 'app', 'build.gradle');
     const kotlinPath = path.join(projectDir, 'android', 'app', 'src', 'main', 'kotlin');
 
+    // Only update the app label in AndroidManifest.xml
     let androidManifest = fs.readFileSync(androidManifestPath, 'utf8');
-    const oldPackageNameMatch = androidManifest.match(/package="([^"]+)"/);
-    if (!oldPackageNameMatch) {
-        throw new Error('Could not find the package name in AndroidManifest.xml');
-    }
-    const oldPackageName = oldPackageNameMatch[1];
-    const oldPackagePath = path.join(kotlinPath, ...oldPackageName.split('.'));
-
-    androidManifest = androidManifest.replace(/package="[^"]+"/, `package="${bundleName}"`);
     androidManifest = androidManifest.replace(/android:label="[^"]+"/, `android:label="${appName}"`);
     fs.writeFileSync(androidManifestPath, androidManifest, 'utf8');
 
+    // Update build.gradle (add namespace and update applicationId)
     let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
+    if (!buildGradle.includes('namespace')) {
+        buildGradle = buildGradle.replace(
+            /android\s*{/, 
+            `android {\n    namespace '${bundleName}'`
+        );
+    } else {
+        buildGradle = buildGradle.replace(/namespace\s+['"].+['"]/, `namespace '${bundleName}'`);
+    }
     buildGradle = buildGradle.replace(/applicationId "[^"]+"/, `applicationId "${bundleName}"`);
-
     fs.writeFileSync(buildGradlePath, buildGradle, 'utf8');
 
+    // Move MainActivity file to the new package structure
+    const oldPackageName = "com.omix.prepto"; // Hardcoded old package name
+    const oldPackagePath = path.join(kotlinPath, ...oldPackageName.split('.'));
     const packageParts = bundleName.split('.');
     const newPackagePath = path.join(kotlinPath, ...packageParts);
+
     fs.ensureDirSync(newPackagePath);
 
     const mainActivityFile = fs.existsSync(path.join(oldPackagePath, 'MainActivity.kt')) ? 'MainActivity.kt' : 'MainActivity.java';
@@ -172,7 +177,10 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
     let mainActivityContent = fs.readFileSync(mainActivityPath, 'utf8');
     mainActivityContent = mainActivityContent.replace(/package .+;/, `package ${bundleName};`);
     fs.writeFileSync(mainActivityPath, mainActivityContent, 'utf8');
+
+    console.log(`Android files updated with namespace "${bundleName}" and app name "${appName}".`);
 }
+
 
 // Update environment variables or configuration files
 function updateConfigFiles(offlineCategoryId, apiUrl, androidProductId, projectDir) {
