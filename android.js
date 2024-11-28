@@ -151,15 +151,19 @@ function updateAndroidFiles(bundleName, appName, projectDir) {
 
     // Update build.gradle (add namespace and update applicationId)
     let buildGradle = fs.readFileSync(buildGradlePath, 'utf8');
-    if (!buildGradle.includes('namespace')) {
-        buildGradle = buildGradle.replace(
-            /android\s*{/, 
-            `android {\n    namespace '${bundleName}'`
-        );
-    } else {
-        buildGradle = buildGradle.replace(/namespace\s+['"].+['"]/, `namespace '${bundleName}'`);
-    }
-    buildGradle = buildGradle.replace(/applicationId "[^"]+"/, `applicationId "${bundleName}"`);
+
+    // Replace the namespace
+    buildGradle = buildGradle.replace(
+        /namespace\s*=\s*["'][^"']+["']/,
+        `namespace = "${bundleName}"`
+    );
+
+    // Replace the applicationId
+    buildGradle = buildGradle.replace(
+        /applicationId\s*=\s*["'][^"']+["']/,
+        `applicationId = "${bundleName}"`
+    );
+
     fs.writeFileSync(buildGradlePath, buildGradle, 'utf8');
 
     // Move MainActivity file to the new package structure
@@ -432,7 +436,7 @@ function copyToShippableFolder(projectDir, folderName, buildMode) {
 async function main() {
     const { buildMode, flutterAppFolderName, bundleName, appName, offlineCategoryId, apiUrl, androidProductId, versionName, versionCode } = await promptUser();
     const flutterAppFolderPath = resolveFlutterAppPath(flutterAppFolderName);
-    
+
     try {
         const projectDir = await copyProject(flutterAppFolderPath, bundleName);
         await updateAppIcon(projectDir);
